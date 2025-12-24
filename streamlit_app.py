@@ -77,7 +77,7 @@ if df_products is None:
     st.error("Datoteka 'data.json' manjka!")
     st.stop()
 
-st.title("🧠 AI Analizator (Hugging Face DistilBERT)")
+st.title("🧠 Pregled in Analiza Komentarjev")
 
 # Sidebar
 view_option = st.sidebar.radio("Pogled:", ("Analiza Komentarjev", "Pregled Izdelkov", "Mnenja"))
