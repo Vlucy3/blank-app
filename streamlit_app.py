@@ -2,23 +2,24 @@ import streamlit as st
 import pandas as pd
 import json
 import os
-import altair as alt  # Knjižnica za grafe
+import altair as alt
 from transformers import pipeline
 
-# --- 1. KONFIGURACIJA IN AI MODEL ---
+# --- 0. NASTAVITVE ---
+st.set_page_config(page_title="Analiza Komentarjev", page_icon="🧠", layout="wide")
+
+# --- 1. FUNKCIJE ---
 
 @st.cache_resource
-def load_sentiment_model():
-    """
-    Naloži AI model. Shrani se v cache za hitrejše delovanje.
-    """
+def load_pipeline():
+    # 3. Sentiment Analysis: Integrate Transformer model from Hugging Face
+    # Uporabimo specifičen model, ki ga zahteva profesor
     return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 
-# --- 2. NALAGANJE PODATKOV ---
+@st.cache_data
 def load_data():
     filename = 'data.json'
     if not os.path.exists(filename):
-        st.error(f"Datoteka '{filename}' ni bila najdena.")
         return None, None, None
 
     with open(filename, 'r', encoding='utf-8') as f:
@@ -34,123 +35,144 @@ def load_data():
 
     return df_products, df_reviews, df_testimonials
 
+def analiziraj_besedilo(df):
+    classifier = load_pipeline()
+    labels = []
+    scores = []
+    
+    # Hugging Face pipeline vrne seznam slovarjev
+    # Primer: [{'label': 'POSITIVE', 'score': 0.998}]
+    
+    # Opomba: Za hitrost bi lahko poslali celoten seznam (list(df['comment'])), 
+    # ampak zaradi omejitve dolžine (truncation) naredimo zanko za varnost.
+    
+    for comment in df['comment']:
+        # Omejimo na prvih 512 znakov, ker imajo BERT modeli omejitev
+        # in da preprečimo napake pri dolgih tekstih.
+        text_input = comment[:512]
+        
+        rezultat = classifier(text_input)[0]
+        
+        # Shranimo Label (POSITIVE/NEGATIVE) in Score (verjetnost)
+        labels.append(rezultat['label'])
+        scores.append(rezultat['score'])
+    
+    df['Sentiment'] = labels
+    df['Confidence'] = scores
+    
+    # Indikatorji za tabelo
+    def doloci_barvo(l):
+        if l == "POSITIVE": return "🟩"
+        elif l == "NEGATIVE": return "🟥"
+        else: return "⬜"
+    
+    df['Stanje'] = df['Sentiment'].apply(doloci_barvo)
+    return df
+
+# --- 2. GLAVNI PROGRAM ---
+
 df_products, df_reviews, df_testimonials = load_data()
 
 if df_products is None:
+    st.error("Datoteka 'data.json' manjka!")
     st.stop()
 
-# --- 3. VMESNIK (LAYOUT) ---
-
-st.title("📊 Pregled in Analiza Podatkov")
+st.title("🧠 AI Analizator (Hugging Face DistilBERT)")
 
 # Sidebar
-st.sidebar.header("Navigacija")
-view_option = st.sidebar.radio(
-    "Izberi pogled:",
-    ("Izdelki (Products)", "Pričevanja (Testimonials)", "Ocene (Reviews)")
-)
-st.sidebar.markdown("---")
+view_option = st.sidebar.radio("Pogled:", ("Analiza Komentarjev", "Pregled Izdelkov", "Mnenja"))
 
-# --- LOGIKA PRIKAZA ---
-
-# A. IZDELKI
-if view_option == "Izdelki (Products)":
-    st.header("Seznam Izdelkov")
-    st.dataframe(
-        df_products, 
-        use_container_width=True,
-        column_config={"price": st.column_config.NumberColumn("Cena (€)", format="€ %s")}
-    )
-
-# B. PRIČEVANJA
-elif view_option == "Pričevanja (Testimonials)":
-    st.header("Mnenja uporabnikov")
-    st.table(df_testimonials)
-
-# C. OCENE (Analiza + GRAF)
-elif view_option == "Ocene (Reviews)":
-    st.header("Analiza Sentimentov")
+if view_option == "Analiza Komentarjev":
     
-    # Slider
-    months = [
+    # Časovnica
+    meseci = [
         "Januar 2023", "Februar 2023", "Marec 2023", "April 2023", 
         "Maj 2023", "Junij 2023", "Julij 2023", "Avgust 2023", 
         "September 2023", "Oktober 2023", "November 2023", "December 2023"
     ]
-    selected_month_name = st.select_slider("Izberi mesec (leto 2023):", options=months)
-    month_index = months.index(selected_month_name) + 1
+    izbran_mesec = st.select_slider("Izberi obdobje:", options=meseci, value="Januar 2023")
+    idx_meseca = meseci.index(izbran_mesec) + 1
     
-    # Filtriranje
-    filtered_df = df_reviews[
-        (df_reviews['date'].dt.month == month_index) & 
+    df_filtered = df_reviews[
+        (df_reviews['date'].dt.month == idx_meseca) & 
         (df_reviews['date'].dt.year == 2023)
     ].copy()
     
-    filtered_df = filtered_df.sort_values(by='date', ascending=False)
-
-    st.subheader(f"Rezultati za: {selected_month_name}")
-    
-    if not filtered_df.empty:
-        # --- ZAGON AI ANALIZE ---
-        with st.spinner("🧠 Umetna inteligenca analizira komentarje..."):
-            classifier = load_sentiment_model()
-            results = classifier(filtered_df['comment'].str[:512].tolist())
+    if not df_filtered.empty:
+        # Analiza
+        with st.spinner('Model analizira sentiment...'):
+            df_analizirano = analiziraj_besedilo(df_filtered)
         
-        # --- OBDELAVA REZULTATOV ---
-        sentiment_labels = [res['label'] for res in results]
-        sentiment_scores = [res['score'] for res in results]
+        # KPI
+        st.divider()
+        col1, col2, col3 = st.columns(3)
+        stevilo_vseh = len(df_analizirano)
+        stevilo_poz = len(df_analizirano[df_analizirano['Sentiment'] == 'POSITIVE'])
+        stevilo_neg = len(df_analizirano[df_analizirano['Sentiment'] == 'NEGATIVE'])
         
-        # Dodamo podatke v DataFrame
-        filtered_df['Sentiment'] = sentiment_labels
-        filtered_df['Score'] = sentiment_scores
+        col1.metric("Število komentarjev", stevilo_vseh)
+        col2.metric("Pozitivni (POSITIVE)", f"{stevilo_poz}")
+        col3.metric("Negativni (NEGATIVE)", f"{stevilo_neg}")
         
-        # Ustvarimo indikatorje (kvadratke)
-        filtered_df['Indikator'] = filtered_df['Sentiment'].apply(lambda x: "🟩" if x == "POSITIVE" else "🟥")
-
-        # -------------------------------------------------------
-        # TUKAJ JE KODA ZA GRAF (ALTAIR)
-        # -------------------------------------------------------
-        st.markdown("### 📈 Statistika sentimenta")
+        # --- 4. VISUALIZATION (BAR CHART) ---
+        col_chart, col_data = st.columns([1, 2])
         
-        # Priprava podatkov za graf (Grouping)
-        chart_data = filtered_df.groupby('Sentiment').agg(
-            Count=('Sentiment', 'count'),      # Preštejemo koliko je katerih
-            Avg_Score=('Score', 'mean')        # Izračunamo povprečno zanesljivost
-        ).reset_index()
+        with col_chart:
+            st.markdown("#### Sentiment & Povprečna Samozavest")
+            
+            # Priprava podatkov za graf:
+            # Štejemo pojavitve (count) in povprečje samozavesti (mean score)
+            chart_data = df_analizirano.groupby('Sentiment').agg(
+                Count=('Sentiment', 'count'),
+                AvgConfidence=('Confidence', 'mean')
+            ).reset_index()
+            
+            # Bar Chart z Altair
+            bar_chart = alt.Chart(chart_data).mark_bar().encode(
+                x=alt.X('Sentiment', axis=alt.Axis(title="Sentiment")),
+                y=alt.Y('Count', axis=alt.Axis(title="Število komentarjev")),
+                color=alt.Color('Sentiment', scale=alt.Scale(
+                    domain=['POSITIVE', 'NEGATIVE'],
+                    range=['#2ecc71', '#e74c3c'] 
+                )),
+                # Advanced: Tooltip z Average Confidence Score
+                tooltip=[
+                    'Sentiment', 
+                    'Count', 
+                    alt.Tooltip('AvgConfidence', format='.2%', title="Povpr. samozavest (Score)")
+                ]
+            ).properties(height=300)
+            
+            st.altair_chart(bar_chart, use_container_width=True)
 
-        # Izris grafa
-        chart = alt.Chart(chart_data).mark_bar().encode(
-            x=alt.X('Sentiment', title='Sentiment'),
-            y=alt.Y('Count', title='Število ocen'),
-            # Barve: Zelena za POSITIVE, Rdeča za NEGATIVE
-            color=alt.Color('Sentiment', scale=alt.Scale(domain=['POSITIVE', 'NEGATIVE'], range=['#2ecc71', '#e74c3c']), legend=None),
-            # Tooltip (kaj se pokaže, ko greš z miško čez)
-            tooltip=[
-                alt.Tooltip('Sentiment', title='Sentiment'),
-                alt.Tooltip('Count', title='Število'),
-                alt.Tooltip('Avg_Score', format='.2%', title='Povpr. zanesljivost')
-            ]
-        ).properties(
-            height=300 # Višina grafa
-        )
-
-        st.altair_chart(chart, use_container_width=True)
-        # -------------------------------------------------------
-
-        # --- PRIKAZ TABELE ---
-        st.markdown("### 📝 Podrobni podatki")
-        st.dataframe(
-            filtered_df,
-            use_container_width=True,
-            column_config={
-                "Indikator": st.column_config.TextColumn("Stanje", width="small"),
-                "date": st.column_config.DateColumn("Datum", format="DD.MM.YYYY"),
-                "comment": "Komentar",
-                "Sentiment": st.column_config.TextColumn("Ocena AI"),
-                "Score": st.column_config.ProgressColumn("Zanesljivost", format="%.2f", min_value=0.5, max_value=1.0)
-            },
-            column_order=["Indikator", "date", "comment", "Sentiment", "Score"]
-        )
-
+        with col_data:
+            st.markdown("#### Podrobnosti")
+            
+            st.dataframe(
+                df_analizirano,
+                use_container_width=True,
+                column_config={
+                    "Stanje": st.column_config.TextColumn("AI", width="small"),
+                    "date": st.column_config.DateColumn("Datum", format="DD.MM"),
+                    "comment": "Komentar",
+                    "Sentiment": st.column_config.TextColumn("Ocena"),
+                    # Prikaz samozavesti kot progress bar
+                    "Confidence": st.column_config.ProgressColumn(
+                        "Confidence Score", 
+                        min_value=0, 
+                        max_value=1, 
+                        format="%.2f"
+                    )
+                },
+                column_order=["Stanje", "Sentiment", "Confidence", "comment"]
+            )
     else:
-        st.warning(f"Za mesec {selected_month_name} ni bilo najdenih nobenih ocen.")
+        st.info(f"V mesecu {izbran_mesec} ni bilo komentarjev.")
+
+elif view_option == "Pregled Izdelkov":
+    st.header("🛒 Izdelki")
+    st.dataframe(df_products, use_container_width=True)
+
+elif view_option == "Mnenja":
+    st.header("💬 Mnenja")
+    st.table(df_testimonials)
