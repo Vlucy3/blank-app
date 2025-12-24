@@ -1,5 +1,7 @@
 streamlit
 selenium
 pandas
+altair
 transformers
 torch
+
